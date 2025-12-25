@@ -1,0 +1,29 @@
+# Keil & STM32 垃圾文件
+Objects/
+Listings/
+*.uvoptx
+*.uvguix
+*.dep
+*.map
+*.o
+*.d
+*.crf
+*.htm
+*.lnp
+*.axf
+*.hex
+*.bin
+*.iex
+*.sct
+*.lst
+
+# IDE 缓存
+.vscode/
+.idea/
+
+# 重点防御：大数据文件
+SerialData/*.npy
+SerialData/*.txt
+SerialData/*.mat
+SerialData/*.pdf
+Python_DataAnalysis/

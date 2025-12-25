@@ -1,0 +1,77 @@
+=================================================
+      I2C 传感器 -> GPIO 引脚映射表
+=================================================
+生成日期: 2025-09-02
+数据基准: MyI2C.c -> SDA_Read() 函数
+
+本文档详细列出了逻辑传感器编号 (0-63) 
+与其物理SDA引脚 (GPIO端口 + 引脚号) 的对应关系。
+
+-------------------------------------------------
+ 传感器编号 | GPIO 端口 | 引脚号
+-------------------------------------------------
+ Sensor 00    |   GPIOB   |   Pin 0
+ Sensor 01    |   GPIOB   |   Pin 1
+ Sensor 02    |   GPIOB   |   Pin 2
+ Sensor 03    |   GPIOB   |   Pin 5
+ Sensor 04    |   GPIOB   |   Pin 6
+ Sensor 05    |   GPIOB   |   Pin 7
+ Sensor 06    |   GPIOB   |   Pin 8
+ Sensor 07    |   GPIOB   |   Pin 9
+ Sensor 08    |   GPIOF   |   Pin 7
+ Sensor 09    |   GPIOF   |   Pin 8
+ Sensor 10    |   GPIOB   |   Pin 12
+ Sensor 11    |   GPIOB   |   Pin 13
+ Sensor 12    |   GPIOB   |   Pin 14
+ Sensor 13    |   GPIOB   |   Pin 15
+ Sensor 14    |   GPIOC   |   Pin 0
+ Sensor 15    |   GPIOC   |   Pin 1
+ Sensor 16    |   GPIOC   |   Pin 2
+ Sensor 17    |   GPIOC   |   Pin 3
+ Sensor 18    |   GPIOC   |   Pin 4
+ Sensor 19    |   GPIOC   |   Pin 5
+ Sensor 20    |   GPIOC   |   Pin 6
+ Sensor 21    |   GPIOC   |   Pin 7
+ Sensor 22    |   GPIOC   |   Pin 8
+ Sensor 23    |   GPIOC   |   Pin 9
+ Sensor 24    |   GPIOF   |   Pin 9
+ Sensor 25    |   GPIOF   |   Pin 10
+ Sensor 26    |   GPIOF   |   Pin 11
+ Sensor 27    |   GPIOF   |   Pin 12
+ Sensor 28    |   GPIOD   |   Pin 3
+ Sensor 29    |   GPIOD   |   Pin 4
+ Sensor 30    |   GPIOD   |   Pin 5
+ Sensor 31    |   GPIOD   |   Pin 7
+ Sensor 32    |   GPIOD   |   Pin 6
+ Sensor 33    |   GPIOD   |   Pin 8
+ Sensor 34    |   GPIOD   |   Pin 9
+ Sensor 35    |   GPIOD   |   Pin 10
+ Sensor 36    |   GPIOD   |   Pin 11
+ Sensor 37    |   GPIOD   |   Pin 12
+ Sensor 38    |   GPIOD   |   Pin 13
+ Sensor 39    |   GPIOD   |   Pin 14
+ Sensor 40    |   GPIOD   |   Pin 15
+ Sensor 41    |   GPIOE   |   Pin 0
+ Sensor 42    |   GPIOE   |   Pin 1
+ Sensor 43    |   GPIOE   |   Pin 2
+ Sensor 44    |   GPIOE   |   Pin 3
+ Sensor 45    |   GPIOE   |   Pin 4
+ Sensor 46    |   GPIOE   |   Pin 5
+ Sensor 47    |   GPIOE   |   Pin 6
+ Sensor 48    |   GPIOE   |   Pin 7
+ Sensor 49    |   GPIOE   |   Pin 8
+ Sensor 50    |   GPIOE   |   Pin 9
+ Sensor 51    |   GPIOE   |   Pin 10
+ Sensor 52    |   GPIOE   |   Pin 11
+ Sensor 53    |   GPIOE   |   Pin 12
+ Sensor 54    |   GPIOE   |   Pin 13
+ Sensor 55    |   GPIOE   |   Pin 14
+ Sensor 56    |   GPIOE   |   Pin 15
+ Sensor 57    |   GPIOF   |   Pin 0
+ Sensor 58    |   GPIOF   |   Pin 1
+ Sensor 59    |   GPIOF   |   Pin 2
+ Sensor 60    |   GPIOF   |   Pin 3
+ Sensor 61    |   GPIOF   |   Pin 4
+ Sensor 62    |   GPIOF   |   Pin 5
+ Sensor 63    |   GPIOF   |   Pin 6
+-------------------------------------------------
