@@ -62,31 +62,48 @@ void ICM20602_PreInit_PacketBuffers(uint8_t* ping_buf, uint8_t* pong_buf)
 
 int ICM20602_ReadBurst_Bare(SerialImuPacket_t* pPacketBuffer)
 {
-    // =========================================================================
-    // 升级点 3: 循环读取 12 次，获取所有轴的数据
-    // =========================================================================
-    for (uint8_t i = 0; i < 12; i++) {
-        I2C_Start();
-        I2C_SendByte(ICM20602_I2C_ADDRESS, g_ucAck);
-        I2C_SendByte(g_ucRegisterMap[i], g_ucAck);
-        I2C_Start();
-        I2C_SendByte(ICM20602_I2C_ADDRESS | 0x01, g_ucAck);
-        I2C_ReceiveByte(pPacketBuffer[i].ucData, 0); // NACK
-        I2C_Stop();
-		
+    // 1. 发送起始地址 0x3B (Accel X High)
+    I2C_Start();
+    I2C_SendByte(ICM20602_I2C_ADDRESS, g_ucAck);
+    I2C_SendByte(ICM20602_ACCEL_XOUT_H, g_ucAck); 
+    
+    // 2. 切换到读模式
+    I2C_Start();
+    I2C_SendByte(ICM20602_I2C_ADDRESS | 0x01, g_ucAck);
+
+    // 3. 连续读取 6 个字节 (加速度 X, Y, Z) - 存入 buffer 0~5
+    for (uint8_t i = 0; i < 6; i++) {
+        I2C_ReceiveByte(pPacketBuffer[i].ucData, 1); // ACK
     }
-	for (uint8_t i = 0; i < 12; i++) {
+
+    // 4. 【修复点】定义足够大的缓冲区来接住 64 个传感器的废弃数据
+    uint8_t dummy[I2C_NUM]; // <--- 必须是数组，不能是单个变量！
+    
+    I2C_ReceiveByte(dummy, 1); // 读 Temp H (0x41), 丢进垃圾桶, 发 ACK
+    I2C_ReceiveByte(dummy, 1); // 读 Temp L (0x42), 丢进垃圾桶, 发 ACK
+
+    // 5. 继续读取 5 个陀螺仪字节 (Gyro X H/L, Y H/L, Z H) - 存入 buffer 6~10
+    for (uint8_t i = 6; i < 11; i++) {
+        I2C_ReceiveByte(pPacketBuffer[i].ucData, 1); // ACK
+    }
+
+    // 6. 读取最后一个字节 (Gyro Z Low) 并发送 NACK
+    I2C_ReceiveByte(pPacketBuffer[11].ucData, 0); // NACK
+
+    I2C_Stop();
+    
+    // 7. 计算校验和
+    for (uint8_t i = 0; i < 12; i++) {
         uint8_t checksum = 0;
         uint8_t* pBytes = (uint8_t*)&pPacketBuffer[i];
-        // 累加前 67 个字节 (2字节头 + 1字节序号 + 64字节数据)
         for (uint8_t k = 0; k < SERIAL_PACKET_SIZE - 1; k++) {
             checksum += pBytes[k];
         }
         pPacketBuffer[i].ucChecksum = checksum;
     }
+
     return 0;
 }
-
 static void ICM20602_Init_Chip(void)
 {
     I2C_Config();
