@@ -73,6 +73,16 @@ int ICM20602_ReadBurst_Bare(SerialImuPacket_t* pPacketBuffer)
         I2C_SendByte(ICM20602_I2C_ADDRESS | 0x01, g_ucAck);
         I2C_ReceiveByte(pPacketBuffer[i].ucData, 0); // NACK
         I2C_Stop();
+		
+    }
+	for (uint8_t i = 0; i < 12; i++) {
+        uint8_t checksum = 0;
+        uint8_t* pBytes = (uint8_t*)&pPacketBuffer[i];
+        // 累加前 67 个字节 (2字节头 + 1字节序号 + 64字节数据)
+        for (uint8_t k = 0; k < SERIAL_PACKET_SIZE - 1; k++) {
+            checksum += pBytes[k];
+        }
+        pPacketBuffer[i].ucChecksum = checksum;
     }
     return 0;
 }

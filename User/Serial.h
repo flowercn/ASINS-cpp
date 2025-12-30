@@ -28,7 +28,7 @@ typedef struct {
     uint8_t ucHead[2];        //!< 包头同步字 (0xA5, 0x5A)
     uint8_t ucSerialNumber;   //!< 包序号 (0x01 - 0x08)
     uint8_t ucData[64];       //!< 主要数据负载
-    uint8_t ucReserved;       //!< 保留字节（用于 4 字节对齐，提高效率）
+    uint8_t ucChecksum;       //!< 保留字节（用于 4 字节对齐，提高效率）
 } SerialImuPacket_t;
 #pragma pack(pop)
 
