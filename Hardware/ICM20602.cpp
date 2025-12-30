@@ -76,8 +76,8 @@ int ICM20602_ReadBurst_Bare(SerialImuPacket_t* pPacketBuffer)
         I2C_ReceiveByte(pPacketBuffer[i].ucData, 1); // ACK
     }
 
-    // 4. 【修复点】定义足够大的缓冲区来接住 64 个传感器的废弃数据
-    uint8_t dummy[I2C_NUM]; // <--- 必须是数组，不能是单个变量！
+    // 4. 定义的缓冲区来接 64 个传感器的废弃数据
+    uint8_t dummy[I2C_NUM]; 
     
     I2C_ReceiveByte(dummy, 1); // 读 Temp H (0x41), 丢进垃圾桶, 发 ACK
     I2C_ReceiveByte(dummy, 1); // 读 Temp L (0x42), 丢进垃圾桶, 发 ACK
@@ -91,16 +91,6 @@ int ICM20602_ReadBurst_Bare(SerialImuPacket_t* pPacketBuffer)
     I2C_ReceiveByte(pPacketBuffer[11].ucData, 0); // NACK
 
     I2C_Stop();
-    
-    // 7. 计算校验和
-    for (uint8_t i = 0; i < 12; i++) {
-        uint8_t checksum = 0;
-        uint8_t* pBytes = (uint8_t*)&pPacketBuffer[i];
-        for (uint8_t k = 0; k < SERIAL_PACKET_SIZE - 1; k++) {
-            checksum += pBytes[k];
-        }
-        pPacketBuffer[i].ucChecksum = checksum;
-    }
 
     return 0;
 }
