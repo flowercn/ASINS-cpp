@@ -133,8 +133,7 @@ void SerialManager::configHardware(uint32_t bound) {
 }
 
 void SerialManager::configDma() {
-    // ... 原 USART_DMA_Tx_Config 逻辑 ...
-	    DMA_InitTypeDef DMA_InitStruct;
+    DMA_InitTypeDef DMA_InitStruct;
     NVIC_InitTypeDef NVIC_InitStruct;
 
     // 使能DMA时钟
@@ -143,20 +142,28 @@ void SerialManager::configDma() {
     // 配置DMA通道参数
     DMA_DeInit(SERIAL_DMA_CHANNEL);
     DMA_InitStruct.DMA_PeripheralBaseAddr = (uint32_t)&SERIAL_USART_PERIPH->DR; // 外设地址
-    DMA_InitStruct.DMA_MemoryBaseAddr = reinterpret_cast<uint32_t>(s_buffer_active);// 内存地址 (初始指向active)
+    DMA_InitStruct.DMA_MemoryBaseAddr = reinterpret_cast<uint32_t>(s_buffer_active); // 内存地址
     DMA_InitStruct.DMA_DIR = DMA_DIR_PeripheralDST; // 方向：内存到外设
     DMA_InitStruct.DMA_BufferSize = DMA_BUFFER_SIZE; // 缓冲区大小
     DMA_InitStruct.DMA_PeripheralInc = DMA_PeripheralInc_Disable; // 外设地址不增
     DMA_InitStruct.DMA_MemoryInc = DMA_MemoryInc_Enable; // 内存地址递增
-    DMA_InitStruct.DMA_Mode = DMA_Mode_Normal; // 普通模式（非循环）
+    
+    // ==========================================================
+    // !!! 关键修复：必须明确指定数据宽度为 Byte (8位) !!!
+    // 之前未初始化这里，如果是随机值，DMA将无法工作
+    // ==========================================================
+    DMA_InitStruct.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
+    DMA_InitStruct.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
+    
+    DMA_InitStruct.DMA_Mode = DMA_Mode_Normal; // 普通模式
     DMA_InitStruct.DMA_Priority = DMA_Priority_VeryHigh; // 优先级
-    DMA_InitStruct.DMA_M2M = DMA_M2M_Disable; // 非内存到内存模式
+    DMA_InitStruct.DMA_M2M = DMA_M2M_Disable; // 非内存到内存
     DMA_Init(SERIAL_DMA_CHANNEL, &DMA_InitStruct);
 
     // 使能DMA传输完成中断
     DMA_ITConfig(SERIAL_DMA_CHANNEL, DMA_IT_TC, ENABLE);
 
-    // 配置DMA中断的NVIC (嵌套向量中断控制器)
+    // 配置DMA中断的NVIC
     NVIC_InitStruct.NVIC_IRQChannel = SERIAL_DMA_IRQn;
     NVIC_InitStruct.NVIC_IRQChannelPreemptionPriority = 2;
     NVIC_InitStruct.NVIC_IRQChannelSubPriority = 1;

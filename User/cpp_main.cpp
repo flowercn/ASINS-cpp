@@ -147,37 +147,33 @@ void cpp_entry(void) {
         uint8_t* current_tx_ptr = p_pingpong_bufs[buf_idx];
 
         if (s_current_state == STATE_CALIBRATING) {
-            // === 标定模式 ===
-            // 防止死锁保底
+            // === 标定模式 (逻辑保持不变) ===
             if (s_sample_count == 0) {
                 ICM20602_ReadBurst_Bare(s_temp_buffer);
                 Accumulate_Data(s_temp_buffer);
             }
 
             if (s_sample_count > 0) {
-                // 源头修正：累加时仅处理 j=3,4,5 (Gyro X,Y,Z)
+                // 仅累加陀螺仪
                 for(int i=0; i<64; i++) {
                     for(int j=3; j<6; j++) {
                         s_offsets[j][i] += s_accumulator[j][i]; 
                     }
                 }
-                
                 s_total_real_samples += s_sample_count;
                 s_calib_frame_count++;
                 Reset_Accumulators(); 
             }
 
             if (s_calib_frame_count >= CALIB_TARGET_FRAMES) {
-                // === 标定结束：计算最终零偏 ===
+                // 结算标定
                 if (s_total_real_samples > 0) {
                     for(int i=0; i<64; i++) {
-                        // 源头修正：仅除以 Gyro 的采样数，Accel 保持为 0
                         for(int j=3; j<6; j++) {
                             s_offsets[j][i] /= s_total_real_samples; 
                         }
                     }
                 }
-                
                 s_is_calibrated = true;
                 s_current_state = STATE_NORMAL;
                 LedRed::reset();
@@ -186,21 +182,29 @@ void cpp_entry(void) {
         }
         else {
             // === 正常模式 ===
+            
+            // 1. 始终尝试采样 (防止数据断流)
             if (s_sample_count < 1) {
                 ICM20602_ReadBurst_Bare(s_temp_buffer);
                 Accumulate_Data(s_temp_buffer);
             } 
             
+            // 2. 只有当：(1)有数据 AND (2)串口不忙 时，才进行发送操作
             if (s_sample_count > 0) {
-                // 处理数据 (内含 axis>=3 的修正)
-                Average_And_Write_To_Buffer(reinterpret_cast<SerialImuPacket_t*>(current_tx_ptr));
-                
-                // 发送
-                Serial.transmit(current_tx_ptr);
-                
-                // 乒乓翻转
-                buf_idx = !buf_idx;
-                Reset_Accumulators();
+                // 【关键逻辑】检查当前要写的缓冲区是否正在被 DMA 占用
+                if (!Serial.isBufferBusy(current_tx_ptr)) {
+                    
+                    // A. 不忙 -> 放心写入数据
+                    Average_And_Write_To_Buffer(reinterpret_cast<SerialImuPacket_t*>(current_tx_ptr));
+                    
+                    // B. 启动 DMA
+                    Serial.transmit(current_tx_ptr);
+                    
+                    // C. 切换到下一块缓冲区
+                    buf_idx = !buf_idx;
+                    Reset_Accumulators();
+                }
+                // D. 如果忙 -> 什么都不做，保留当前 Accumulator 数据，下一轮循环再试
             }
         }
     }

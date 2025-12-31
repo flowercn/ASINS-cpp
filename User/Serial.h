@@ -40,6 +40,11 @@ public:
 	uint8_t getCommand();
 	uint8_t* getActiveBuffer() { return s_buffer_active; }
     uint8_t* getShadowBuffer() { return s_buffer_shadow; }
+	
+	bool isBufferBusy(uint8_t* pBuf) {
+        return (current_tx_ptr == pBuf) || (next_tx_ptr == pBuf);
+    }
+	
 	void handleDmaIsr();
 	void handleUartIsr();
 private:
