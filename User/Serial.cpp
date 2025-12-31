@@ -2,17 +2,11 @@
  * @file Serial.cpp
  * @brief 串口通信及DMA乒乓缓冲机制实现
  * @author dengyihang
- * @date 2025-08-30
+ * @date 2025-08-30/2025-12-31
  */
 
 #include "Serial.h"
-
-//==================================================================================================
-// 模块级私有定义 (Module-Private Definitions)
-//==================================================================================================
-
-// 通过宏定义选择使用的USART端口，方便在USART2和USART3之间切换
-//#define USE_USART3_FOR_422
+#include "cpp_main.h"
 
 #ifdef USE_USART3_FOR_422
     // --- USART3 (RS-422) 配置 ---
@@ -40,78 +34,64 @@
     #define SERIAL_DMA_IRQHandler       DMA1_Channel7_IRQHandler
 #endif
 
-//! DMA乒乓缓冲区的实体
-static uint8_t s_ping_buffer[DMA_BUFFER_SIZE];
-static uint8_t s_pong_buffer[DMA_BUFFER_SIZE];
+uint8_t SerialManager::s_buffer_active[DMA_BUFFER_SIZE];
+uint8_t SerialManager::s_buffer_shadow[DMA_BUFFER_SIZE];
 
-// --- 模块级变量 ---
-uint8_t* p_ping_buffer = s_ping_buffer;
-uint8_t* p_pong_buffer = s_pong_buffer;
-static volatile uint8_t s_received_command = 0;
-
-volatile uint8_t* s_dma_current_buffer = NULL;
-volatile uint8_t* s_dma_next_buffer = NULL;
-
-//==================================================================================================
-// 私有函数声明 (Private Function Declarations)
-//==================================================================================================
-
-static void USART_Config(uint32_t bound);
-static void USART_DMA_Tx_Config(void);
-
-//==================================================================================================
-// 公共函数实现 (Public Function Implementations)
-//==================================================================================================
-
-/**
- * @brief 初始化串口及DMA
- */
-void Serial_Init(uint32_t ulBaudrate)
-{
-    USART_Config(ulBaudrate);
-    USART_DMA_Tx_Config();
+void SerialManager::init(uint32_t baudrate) {
+    configHardware(baudrate);
+    configDma();
 }
 
-/**
- * @brief 发送一个数据缓冲区
- */
-int Serial_SendBuffer(uint8_t* pBuffer)
-{
-    __disable_irq(); // 进入临界区
+bool SerialManager::transmit(uint8_t* pBuffer){
+	ScopedIrqLock lock;
+	if (current_tx_ptr == nullptr){
+		current_tx_ptr =pBuffer;
+		SERIAL_DMA_CHANNEL->CMAR = reinterpret_cast<uint32_t>(pBuffer);
+        SERIAL_DMA_CHANNEL->CNDTR = DMA_BUFFER_SIZE;
+        DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE);
+        return true;
+	}
+	else if (next_tx_ptr == nullptr) {
+        next_tx_ptr = pBuffer;
+        return true;
+    }
+	return false;
+}
 
-    if (s_dma_current_buffer == NULL) // 如果DMA空闲
-    {
-        s_dma_current_buffer = pBuffer;
+uint8_t SerialManager::getCommand(){
+	uint8_t cmd = received_cmd;
+	received_cmd = 0;
+	return cmd;
+}
+
+void SerialManager::handleDmaIsr() {
+	if(DMA_GetITStatus(SERIAL_DMA_IT_GL_FLAG) != RESET) {
+		DMA_ClearITPendingBit(SERIAL_DMA_IT_GL_FLAG);
         DMA_Cmd(SERIAL_DMA_CHANNEL, DISABLE);
-        SERIAL_DMA_CHANNEL->CMAR = (uint32_t)pBuffer; // 设置内存地址
-        DMA_SetCurrDataCounter(SERIAL_DMA_CHANNEL, DMA_BUFFER_SIZE); // 设置传输大小
-        DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE); // 启动DMA
+		
+		if (next_tx_ptr != nullptr) {
+			current_tx_ptr =next_tx_ptr;
+			next_tx_ptr = nullptr;
+			
+			SERIAL_DMA_CHANNEL->CMAR = reinterpret_cast<uint32_t>(current_tx_ptr);
+            SERIAL_DMA_CHANNEL->CNDTR = DMA_BUFFER_SIZE;
+			DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE);
+		} 
+		else {
+            current_tx_ptr = nullptr;
+        }
     }
-    else if (s_dma_next_buffer == NULL) // 如果DMA忙，但下一个缓冲区空闲
-    {
-        s_dma_next_buffer = pBuffer; // 将缓冲区置于等待队列
-    }
-    else // 如果两个缓冲区都在使用中
-    {
-        __enable_irq(); // 退出临界区
-        return -1; // 返回失败，表示缓冲区已满
-    }
-
-    __enable_irq(); // 退出临界区
-    return 0; // 成功加入发送队列
 }
 
-//==================================================================================================
-// 私有函数实现 (Private Function Implementations)
-//==================================================================================================
+void SerialManager::handleUartIsr() {
+    if (USART_GetITStatus(SERIAL_USART_PERIPH, USART_IT_RXNE) != RESET) {
+        received_cmd = static_cast<uint8_t>(USART_ReceiveData(SERIAL_USART_PERIPH));
+    }
+}
 
-/**
- * @brief 配置USART硬件参数
- * @param[in] bound 要设置的波特率
- */
-static void USART_Config(uint32_t bound)
-{
-    GPIO_InitTypeDef GPIO_InitStruct;
+void SerialManager::configHardware(uint32_t bound) {
+    // ... 原 USART_Config 逻辑 ...
+	    GPIO_InitTypeDef GPIO_InitStruct;
     USART_InitTypeDef USART_InitStruct;
 
     // 使能USART和GPIO的时钟
@@ -149,33 +129,12 @@ static void USART_Config(uint32_t bound)
     NVIC_InitStruct.NVIC_IRQChannelSubPriority = 0;
     NVIC_InitStruct.NVIC_IRQChannelCmd = ENABLE;
     NVIC_Init(&NVIC_InitStruct);
+    // 注意：最后使能串口中断
 }
 
-
-// 读取并清除命令
-uint8_t Serial_GetCommand(void)
-{
-    uint8_t cmd = s_received_command;
-    s_received_command = 0; // 读完就清零
-    return cmd;
-}
-
-// 串口接收中断服务函数
-extern "C" void USART2_IRQHandler(void) // 如果你用的是 USART3，这里改 USART3_IRQHandler
-{
-    if(USART_GetITStatus(SERIAL_USART_PERIPH, USART_IT_RXNE) != RESET)
-    {
-        uint8_t data = USART_ReceiveData(SERIAL_USART_PERIPH);
-        s_received_command = data; 
-    }
-}
-
-/**
- * @brief 配置USART发送所使用的DMA通道
- */
-static void USART_DMA_Tx_Config(void)
-{
-    DMA_InitTypeDef DMA_InitStruct;
+void SerialManager::configDma() {
+    // ... 原 USART_DMA_Tx_Config 逻辑 ...
+	    DMA_InitTypeDef DMA_InitStruct;
     NVIC_InitTypeDef NVIC_InitStruct;
 
     // 使能DMA时钟
@@ -184,7 +143,7 @@ static void USART_DMA_Tx_Config(void)
     // 配置DMA通道参数
     DMA_DeInit(SERIAL_DMA_CHANNEL);
     DMA_InitStruct.DMA_PeripheralBaseAddr = (uint32_t)&SERIAL_USART_PERIPH->DR; // 外设地址
-    DMA_InitStruct.DMA_MemoryBaseAddr = (uint32_t)s_ping_buffer; // 内存地址 (初始指向ping)
+    DMA_InitStruct.DMA_MemoryBaseAddr = reinterpret_cast<uint32_t>(s_buffer_active);// 内存地址 (初始指向active)
     DMA_InitStruct.DMA_DIR = DMA_DIR_PeripheralDST; // 方向：内存到外设
     DMA_InitStruct.DMA_BufferSize = DMA_BUFFER_SIZE; // 缓冲区大小
     DMA_InitStruct.DMA_PeripheralInc = DMA_PeripheralInc_Disable; // 外设地址不增
@@ -205,42 +164,12 @@ static void USART_DMA_Tx_Config(void)
     NVIC_Init(&NVIC_InitStruct);
 }
 
-//==================================================================================================
-// 中断服务函数 (Interrupt Service Routines)
-//==================================================================================================
-
-// C++ 中断处理函数必须用 extern "C" 包装，防止 name mangling
 extern "C" {
+    void DMA1_Channel7_IRQHandler(void) {
+        SerialManager::getInstance().handleDmaIsr();
+    }
 
-/**
- * @brief DMA传输完成中断服务函数
- * @details 当一个DMA缓冲区发送完成后，此函数被调用。
- *          它会检查是否有下一个缓冲区在等待发送（乒乓缓冲机制），
- *          如果有，则启动下一次DMA传输；如果没有，则将DMA状态设置为空闲。
- */
-void SERIAL_DMA_IRQHandler(void)
-{
-    if (DMA_GetITStatus(SERIAL_DMA_IT_GL_FLAG) != RESET)
-    {
-        DMA_ClearITPendingBit(SERIAL_DMA_IT_GL_FLAG); // 清除中断标志
-        DMA_Cmd(SERIAL_DMA_CHANNEL, DISABLE); // 停止DMA，准备切换
-
-        if (s_dma_next_buffer != NULL) // 检查是否有等待中的缓冲区
-        {
-            // 切换缓冲区指针
-            s_dma_current_buffer = s_dma_next_buffer;
-            s_dma_next_buffer = NULL;
-            
-            // 配置并启动下一次DMA传输
-            SERIAL_DMA_CHANNEL->CMAR = (uint32_t)s_dma_current_buffer;
-            DMA_SetCurrDataCounter(SERIAL_DMA_CHANNEL, DMA_BUFFER_SIZE);
-            DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE);
-        }
-        else
-        {
-            s_dma_current_buffer = NULL; // 没有等待的缓冲区，DMA变为空闲
-        }
+    void USART2_IRQHandler(void) {
+        SerialManager::getInstance().handleUartIsr();
     }
 }
-
-} // extern "C"

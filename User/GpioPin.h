@@ -24,10 +24,6 @@ public:
         return reinterpret_cast<GPIO_TypeDef*>(PortAddr);
     }
 
-    // ========================================
-    // 操作函数 (全部强制内联)
-    // ========================================
-
     // 置高电平 (BSRR 寄存器)
     static inline void set() {
         Port()->BSRR = PinMask;

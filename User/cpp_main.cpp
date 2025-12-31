@@ -8,36 +8,6 @@
 using LedRed   = PA<0>;
 using LedGreen = PA<1>;
 
-class ScopedIrqLock {
-public:
-    ScopedIrqLock() { __disable_irq(); }
-    ~ScopedIrqLock() { __enable_irq(); }
-    ScopedIrqLock(const ScopedIrqLock&) = delete;
-    ScopedIrqLock& operator=(const ScopedIrqLock&) = delete;
-};
-
-class DoubleBufferManager {
-public:
-    DoubleBufferManager(uint8_t* b1, uint8_t* b2) 
-        : buf1_(b1), buf2_(b2), current_write_ptr_(b1) {}
-    uint8_t* try_acquire_write_buffer() {
-        ScopedIrqLock lock; 
-        if (current_write_ptr_ == s_dma_current_buffer || 
-            current_write_ptr_ == s_dma_next_buffer) {
-            return nullptr; 
-        }
-        return current_write_ptr_;
-    }
-    void swap() {
-        current_write_ptr_ = (current_write_ptr_ == buf1_) ? buf2_ : buf1_;
-    }
-
-private:
-    uint8_t* buf1_;
-    uint8_t* buf2_;
-    uint8_t* current_write_ptr_;
-};
-
 // ====================================================================
 // 全局变量定义
 // ====================================================================
@@ -47,7 +17,7 @@ static int32_t s_accumulator[6][64];
 static int s_sample_count = 0;
 static SerialImuPacket_t s_temp_buffer[12]; // 临时读取缓冲区
 
-// 零偏相关
+// 零偏相关 (虽然开了 [6][64]，但只会用到后3行 [3-5][64] 存陀螺仪)
 static int32_t s_offsets[6][64] = {0}; 
 static bool s_is_calibrated = false;   
 
@@ -95,8 +65,9 @@ void Average_And_Write_To_Buffer(SerialImuPacket_t* tx_buffer) {
             // A. 算出当前帧的原始平均值
             int32_t avg_val = s_accumulator[axis][sensor_idx] / s_sample_count;
             
-            // B. 减去零偏
-            if (s_is_calibrated) {
+            // B. 减去零偏 (仅针对陀螺仪: axis 3,4,5)
+            // 源头修正：严格限制只修陀螺仪，防止误伤加速度计
+            if (s_is_calibrated && axis >= 3) {
                 avg_val -= s_offsets[axis][sensor_idx];
             }
 
@@ -117,12 +88,12 @@ void Average_And_Write_To_Buffer(SerialImuPacket_t* tx_buffer) {
     }
 }
 
-// 针对单次读取的 Apply_Offsets (修复了校验和缺失的问题)
+// 针对单次读取的 Apply_Offsets
 static void Apply_Offsets_For_Raw(SerialImuPacket_t* tx_buffer) {
-    // 1. 减零偏
     if (s_is_calibrated) {
         for (int sensor_idx = 0; sensor_idx < 64; sensor_idx++) {
-            for (int axis = 0; axis < 6; axis++) {
+            // 源头修正：循环可以直接从 axis=3 开始，跳过加计
+            for (int axis = 3; axis < 6; axis++) {
                 uint8_t h = tx_buffer[axis*2].ucData[sensor_idx];
                 uint8_t l = tx_buffer[axis*2+1].ucData[sensor_idx];
                 int16_t raw = (int16_t)((h << 8) | l);
@@ -135,7 +106,7 @@ static void Apply_Offsets_For_Raw(SerialImuPacket_t* tx_buffer) {
         }
     }
     
-    // 因为 ReadBurst 里删了校验，如果不算，单次包会被上位机丢弃
+    // 补全校验和
     for (uint8_t i = 0; i < 12; i++) {
         uint8_t checksum = 0;
         uint8_t* pBytes = (uint8_t*)&tx_buffer[i];
@@ -150,14 +121,19 @@ static void Apply_Offsets_For_Raw(SerialImuPacket_t* tx_buffer) {
 // 主入口
 // ====================================================================
 void cpp_entry(void) {
-    DoubleBufferManager buffer_mgr(p_ping_buffer, p_pong_buffer);
+    // 1. 获取 Serial 已经分配好的两个缓冲区地址
+    uint8_t* p_pingpong_bufs[2];
+    p_pingpong_bufs[0] = Serial.getActiveBuffer();
+    p_pingpong_bufs[1] = Serial.getShadowBuffer();
+    uint8_t  buf_idx = 0; 
+
     LedRed::reset();
     LedGreen::set();
     Reset_Accumulators();
 
     while (1) {
         // 1. 处理指令
-        uint8_t cmd = Serial_GetCommand();
+        uint8_t cmd = Serial.getCommand();
         if (cmd == 'C') { 
             s_current_state = STATE_CALIBRATING;
             s_calib_frame_count = 0;
@@ -168,66 +144,64 @@ void cpp_entry(void) {
             LedRed::set();      
         }
         
-        uint8_t* tx_buffer = buffer_mgr.try_acquire_write_buffer();
-        
-        if (tx_buffer != nullptr) {
-            // === DMA 空闲 ===
-            if (s_current_state == STATE_CALIBRATING) {
-                // --- 标定模式 ---
+        uint8_t* current_tx_ptr = p_pingpong_bufs[buf_idx];
+
+        if (s_current_state == STATE_CALIBRATING) {
+            // === 标定模式 ===
+            // 防止死锁保底
+            if (s_sample_count == 0) {
+                ICM20602_ReadBurst_Bare(s_temp_buffer);
+                Accumulate_Data(s_temp_buffer);
+            }
+
+            if (s_sample_count > 0) {
+                // 源头修正：累加时仅处理 j=3,4,5 (Gyro X,Y,Z)
+                for(int i=0; i<64; i++) {
+                    for(int j=3; j<6; j++) {
+                        s_offsets[j][i] += s_accumulator[j][i]; 
+                    }
+                }
                 
-                // 防止死锁保底：如果太快没读到数据，强制读一次
-                if (s_sample_count == 0) {
-                    ICM20602_ReadBurst_Bare(s_temp_buffer);
-                    Accumulate_Data(s_temp_buffer);
-                }
+                s_total_real_samples += s_sample_count;
+                s_calib_frame_count++;
+                Reset_Accumulators(); 
+            }
 
-                if (s_sample_count > 0) {
-                    for(int i=0; i<64; i++) 
-                        for(int j=3; j<6; j++) 
-                            s_offsets[j][i] += s_accumulator[j][i]; 
-                    
-                    s_total_real_samples += s_sample_count;
-                    s_calib_frame_count++;
-                }
-
-                if (s_calib_frame_count >= CALIB_TARGET_FRAMES) {
-                    // === 标定结束：计算最终零偏 ===
-                    if (s_total_real_samples > 0) {
-                        for(int i=0; i<64; i++) {
-                            // 只有陀螺仪 (Axis 3,4,5) 需要扣除静止零偏
-                            for(int j=3; j<6; j++) {
-                                s_offsets[j][i] /= s_total_real_samples; 
-                            }
+            if (s_calib_frame_count >= CALIB_TARGET_FRAMES) {
+                // === 标定结束：计算最终零偏 ===
+                if (s_total_real_samples > 0) {
+                    for(int i=0; i<64; i++) {
+                        // 源头修正：仅除以 Gyro 的采样数，Accel 保持为 0
+                        for(int j=3; j<6; j++) {
+                            s_offsets[j][i] /= s_total_real_samples; 
                         }
                     }
-                    
-                    s_is_calibrated = true;
-                    s_current_state = STATE_NORMAL;
-                    LedRed::reset();
-                    LedGreen::set();
                 }
-                buffer_mgr.swap(); 
+                
+                s_is_calibrated = true;
+                s_current_state = STATE_NORMAL;
+                LedRed::reset();
+                LedGreen::set();
             }
-            else {
-                // --- 正常模式 ---
-                if (s_sample_count > 0) {
-                    Average_And_Write_To_Buffer(reinterpret_cast<SerialImuPacket_t*>(tx_buffer));
-                } else {
-                    ICM20602_ReadBurst_Bare(reinterpret_cast<SerialImuPacket_t*>(tx_buffer));
-                    // 补上单次采样的校验和
-                    Apply_Offsets_For_Raw(reinterpret_cast<SerialImuPacket_t*>(tx_buffer));
-                }
-                Serial_SendBuffer(tx_buffer);
-                buffer_mgr.swap();
-            }
-            Reset_Accumulators();
-        } 
+        }
         else {
-            // === CPU 空闲 ===
-            if (s_sample_count < 2) {
+            // === 正常模式 ===
+            if (s_sample_count < 1) {
                 ICM20602_ReadBurst_Bare(s_temp_buffer);
                 Accumulate_Data(s_temp_buffer);
             } 
+            
+            if (s_sample_count > 0) {
+                // 处理数据 (内含 axis>=3 的修正)
+                Average_And_Write_To_Buffer(reinterpret_cast<SerialImuPacket_t*>(current_tx_ptr));
+                
+                // 发送
+                Serial.transmit(current_tx_ptr);
+                
+                // 乒乓翻转
+                buf_idx = !buf_idx;
+                Reset_Accumulators();
+            }
         }
     }
 }

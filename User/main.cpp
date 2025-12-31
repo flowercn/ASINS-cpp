@@ -5,9 +5,9 @@
 int main(void)
 {
     // 1. 初始化
-    Serial_Init(921600);
+    Serial.init(921600);
     ICM20602_Init_Bare();
-    ICM20602_PreInit_PacketBuffers(p_ping_buffer, p_pong_buffer);
+    ICM20602_PreInit_PacketBuffers(Serial.getActiveBuffer(), Serial.getShadowBuffer());
     
     // 2. 移交控制权给 C++
     cpp_entry();
