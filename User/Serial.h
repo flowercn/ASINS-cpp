@@ -59,6 +59,7 @@ extern volatile uint8_t* s_dma_next_buffer;
 
 extern "C" {
 
+uint8_t Serial_GetCommand(void);
 /**
  * @brief 初始化串口硬件
  * @param ulBaudrate 波特率 (例如 921600)

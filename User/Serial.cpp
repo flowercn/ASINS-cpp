@@ -1,7 +1,7 @@
 /**
  * @file Serial.cpp
  * @brief 串口通信及DMA乒乓缓冲机制实现
- * @author Gemini
+ * @author dengyihang
  * @date 2025-08-30
  */
 
@@ -27,7 +27,7 @@
     #define SERIAL_DMA_IRQn             DMA1_Channel2_IRQn
     #define SERIAL_DMA_IRQHandler       DMA1_Channel2_IRQHandler
 #else
-    // --- USART2 (默认) 配置 ---
+    // --- USART2 (CH340串口) 配置 ---
     #define SERIAL_USART_PERIPH         USART2
     #define SERIAL_USART_RCC            RCC_APB1Periph_USART2
     #define SERIAL_GPIO_PERIPH          GPIOA
@@ -47,6 +47,7 @@ static uint8_t s_pong_buffer[DMA_BUFFER_SIZE];
 // --- 模块级变量 ---
 uint8_t* p_ping_buffer = s_ping_buffer;
 uint8_t* p_pong_buffer = s_pong_buffer;
+static volatile uint8_t s_received_command = 0;
 
 volatile uint8_t* s_dma_current_buffer = NULL;
 volatile uint8_t* s_dma_next_buffer = NULL;
@@ -136,10 +137,37 @@ static void USART_Config(uint32_t bound)
     USART_InitStruct.USART_WordLength = USART_WordLength_8b;
     USART_Init(SERIAL_USART_PERIPH, &USART_InitStruct);
 
-    // 使能USART的DMA发送请求
-    USART_DMACmd(SERIAL_USART_PERIPH, USART_DMAReq_Tx, ENABLE);
-    // 使能USART
-    USART_Cmd(SERIAL_USART_PERIPH, ENABLE);
+    
+    USART_DMACmd(SERIAL_USART_PERIPH, USART_DMAReq_Tx, ENABLE);  // 使能USART的DMA发送请求
+    USART_Cmd(SERIAL_USART_PERIPH, ENABLE);      // 使能USART
+	USART_ITConfig(SERIAL_USART_PERIPH, USART_IT_RXNE, ENABLE);  // 使能接收中断 (RXNE)
+	
+	// 配置 RX 中断优先级
+    NVIC_InitTypeDef NVIC_InitStruct;
+    NVIC_InitStruct.NVIC_IRQChannel = (SERIAL_USART_PERIPH == USART3) ? USART3_IRQn : USART2_IRQn;
+    NVIC_InitStruct.NVIC_IRQChannelPreemptionPriority = 3; // 优先级稍低一点
+    NVIC_InitStruct.NVIC_IRQChannelSubPriority = 0;
+    NVIC_InitStruct.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&NVIC_InitStruct);
+}
+
+
+// 读取并清除命令
+uint8_t Serial_GetCommand(void)
+{
+    uint8_t cmd = s_received_command;
+    s_received_command = 0; // 读完就清零
+    return cmd;
+}
+
+// 串口接收中断服务函数
+extern "C" void USART2_IRQHandler(void) // 如果你用的是 USART3，这里改 USART3_IRQHandler
+{
+    if(USART_GetITStatus(SERIAL_USART_PERIPH, USART_IT_RXNE) != RESET)
+    {
+        uint8_t data = USART_ReceiveData(SERIAL_USART_PERIPH);
+        s_received_command = data; 
+    }
 }
 
 /**

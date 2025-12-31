@@ -4,7 +4,7 @@
 #include <cstring>
 
 // ============================================================================
-// 【C++14 兼容】手动实现 index_sequence（避免 Keil ARMCLANG 的 <utility> bug）
+// C++14 兼容 手动实现 index_sequence（避免 Keil ARMCLANG 的 <utility> bug）
 // ============================================================================
 template<size_t... Is>
 struct index_sequence {};
@@ -37,7 +37,7 @@ using SCL_GroupA = PinList<PA<4>, PA<5>, PA<6>, PA<7>>;
 using SCL_GroupG = PinList<PG<0>, PG<1>, PG<2>, PG<3>>;
 
 // ============================================================================
-// 【C++17 折叠表达式】编译期遍历 - 消除递归，提升编译速度
+// C++17 编译期遍历 - 消除递归，提升编译速度
 // ============================================================================
 
 // 实现函数：使用 index_sequence 展开
@@ -204,31 +204,6 @@ struct PinInitSDA {
 // ============================================================================
 extern "C" {
 
-// ============================================================================
-// 【物理层强驱】总线清洗函数 - 针对死机传感器 (Sensor 19/64)
-// ============================================================================
-static void I2C_BusWasher(void) {
-    GPIO_InitTypeDef wash_init;
-    wash_init.GPIO_Mode = GPIO_Mode_Out_PP;  // 推挽输出
-    wash_init.GPIO_Speed = GPIO_Speed_50MHz;
-    
-    // --- 目标：Sensor 64 (PF6 - FSMC_NIORD) ---
-    wash_init.GPIO_Pin = GPIO_Pin_6;
-    GPIO_Init(GPIOF, &wash_init);
-    GPIO_SetBits(GPIOF, GPIO_Pin_6);  // 强行拉高 3.3V
-    
-    // --- 目标：Sensor 19 (PC4 - ADC12_IN14) ---
-    wash_init.GPIO_Pin = GPIO_Pin_4;
-    GPIO_Init(GPIOC, &wash_init);
-    GPIO_SetBits(GPIOC, GPIO_Pin_4);  // 强行拉高 3.3V
-    
-    // ❌ 【已删除】Sensor 1 (PB0) - 不需要清洗，它之前是通的！
-    // 推挽强驱会触发 TIM3 闭锁效应，反而导致通信断开
-    
-    // 保持 10ms
-    for(volatile uint32_t i = 0; i < 720000; i++);
-}
-
 void I2C_Config(void) {
     // ========================================================================
     // 防御性初始化：隔离外部硬件冲突
@@ -251,11 +226,6 @@ void I2C_Config(void) {
                            RCC_APB2Periph_GPIOC | RCC_APB2Periph_GPIOD | 
                            RCC_APB2Periph_GPIOE | RCC_APB2Periph_GPIOF | 
                            RCC_APB2Periph_GPIOG, ENABLE);
-    
-    // ========================================================================
-    // 【关键】物理层强驱：在正式 I2C 初始化之前清洗故障引脚
-    // ========================================================================
-    I2C_BusWasher();
     
     // 5. 外部SRAM片选拉高（PG10 = FSMC_NE3），强制禁用外部芯片
     GPIO_InitTypeDef sram_cs;
@@ -292,7 +262,7 @@ void I2C_Stop(void) {
 }
 
 // ============================================================================
-// 【核心函数】I2C_ReceiveByte - 接收 64 通道数据
+// I2C_ReceiveByte - 接收 64 通道数据
 // ============================================================================
 void I2C_ReceiveByte(uint8_t* byte, uint8_t Ack) {
     // 释放总线（开漏模式下写 1 相当于高阻态）
