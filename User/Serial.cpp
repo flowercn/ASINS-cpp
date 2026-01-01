@@ -1,12 +1,4 @@
-/**
- * @file Serial.cpp
- * @brief 串口通信及DMA乒乓缓冲机制实现
- * @author dengyihang
- * @date 2025-08-30/2025-12-31
- */
-
 #include "Serial.h"
-#include "cpp_main.h"
 
 #ifdef USE_USART3_FOR_422
     // --- USART3 (RS-422) 配置 ---
@@ -58,10 +50,10 @@ bool SerialManager::transmit(uint8_t* pBuffer){
 	return false;
 }
 
-uint8_t SerialManager::getCommand(){
+SerialCommand SerialManager::getCommand(){
 	uint8_t cmd = received_cmd;
 	received_cmd = 0;
-	return cmd;
+	return static_cast<SerialCommand>(cmd);
 }
 
 void SerialManager::handleDmaIsr() {
@@ -180,3 +172,5 @@ extern "C" {
         SerialManager::getInstance().handleUartIsr();
     }
 }
+
+

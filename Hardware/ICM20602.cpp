@@ -1,12 +1,8 @@
 #include "ICM20602.h"
-#include <string.h>
+#include <cstring>
 
-// I2C应答信号
-static uint8_t g_ucAck[I2C_NUM];
+static uint8_t g_dummyAck[I2C_NUM];
 
-// =================================================================================
-// 升级点 1: 扩展序列号映射 (12个包 = 6轴 x 2字节)
-// =================================================================================
 static const uint8_t g_ucSerialMap[] = {
     0x01, 0x02, // Accel X High, Low
     0x03, 0x04, // Accel Y High, Low
@@ -16,117 +12,68 @@ static const uint8_t g_ucSerialMap[] = {
     0x0B, 0x0C  // Gyro Z High, Low
 };
 
-// =================================================================================
-// 升级点 2: 完整的寄存器映射表 (读取 3轴加速度 + 3轴陀螺仪)
-// =================================================================================
-static const uint8_t g_ucRegisterMap[] = {
-    ICM20602_ACCEL_XOUT_H, ICM20602_ACCEL_XOUT_L,
-    ICM20602_ACCEL_YOUT_H, ICM20602_ACCEL_YOUT_L,
-    ICM20602_ACCEL_ZOUT_H, ICM20602_ACCEL_ZOUT_L,
-    ICM20602_GYRO_XOUT_H,  ICM20602_GYRO_XOUT_L,
-    ICM20602_GYRO_YOUT_H,  ICM20602_GYRO_YOUT_L,
-    ICM20602_GYRO_ZOUT_H,  ICM20602_GYRO_ZOUT_L
-};
-
-static void ICM20602_Init_Chip(void);
-static void ICM20602_WriteReg(uint8_t RegAddress, uint8_t ucData);
-
-int ICM20602_Init_Bare(void)
-{
-    ICM20602_Init_Chip();
-    return 0;
-}
-
-void ICM20602_PreInit_PacketBuffers(uint8_t* ping_buf, uint8_t* pong_buf)
-{
-    SerialImuPacket_t* p_packets;
-    
-    // 初始化 Ping/Pong 缓冲区的包头和序号
-    // 注意：现在我们要处理 12 个包
+void Icm20602Manager::initPacketHeaders(uint8_t* ping_buf, uint8_t* pong_buf) {
+    SerialImuPacket* p_packets;
     uint8_t total_packets = sizeof(g_ucSerialMap);
 
-    p_packets = (SerialImuPacket_t*)ping_buf;
-    for (uint8_t i = 0; i < total_packets; i++) {
-        p_packets[i].ucHead[0] = 0xA5;
-        p_packets[i].ucHead[1] = 0x5A;
-        p_packets[i].ucSerialNumber = g_ucSerialMap[i];
-    }
-
-    p_packets = (SerialImuPacket_t*)pong_buf;
-    for (uint8_t i = 0; i < total_packets; i++) {
-        p_packets[i].ucHead[0] = 0xA5;
-        p_packets[i].ucHead[1] = 0x5A;
-        p_packets[i].ucSerialNumber = g_ucSerialMap[i];
-    }
+    auto fill = [&](uint8_t* buf) {
+        p_packets = (SerialImuPacket*)buf;
+        for (uint8_t i = 0; i < total_packets; i++) {
+            p_packets[i].head[0] = 0xA5;
+            p_packets[i].head[1] = 0x5A;
+            p_packets[i].serialNumber = g_ucSerialMap[i];
+        }
+    };
+    fill(ping_buf);
+    fill(pong_buf);
 }
 
-int ICM20602_ReadBurst_Bare(SerialImuPacket_t* pPacketBuffer)
-{
-    // 1. 发送起始地址 0x3B (Accel X High)
-    I2C_Start();
-    I2C_SendByte(ICM20602_I2C_ADDRESS, g_ucAck);
-    I2C_SendByte(ICM20602_ACCEL_XOUT_H, g_ucAck); 
+void Icm20602Manager::writeReg(uint8_t reg, uint8_t data) {
+    ParallelI2C.start();
+    ParallelI2C.sendByte(ADDR_WRITE, g_dummyAck);
+    ParallelI2C.sendByte(reg, g_dummyAck);
+    ParallelI2C.sendByte(data, g_dummyAck);
+    ParallelI2C.stop();
+}
+
+void Icm20602Manager::init() {
+    ParallelI2C.init(); // 初始化并行总线
+
+    writeReg(ICM20602_PWR_MGMT_1, 0x01);
+    writeReg(ICM20602_PWR_MGMT_2, 0x00);
+    writeReg(ICM20602_SMPLRT_DIV, 0x07);
+    writeReg(ICM20602_GYRO_CONFIG, 0x18);
+    writeReg(ICM20602_ACCEL_CONFIG, 0x18);
+    writeReg(ICM20602_ACCEL_CONFIG2, 0x06);
+}
+
+void Icm20602Manager::readAllSensors(SerialImuPacket* pPacketBuffer) {
+    // 1. 发送写地址 + 寄存器首地址
+    ParallelI2C.start();
+    ParallelI2C.sendByte(ADDR_WRITE, g_dummyAck);
+    ParallelI2C.sendByte(ICM20602_ACCEL_XOUT_H, g_dummyAck);
     
     // 2. 切换到读模式
-    I2C_Start();
-    I2C_SendByte(ICM20602_I2C_ADDRESS | 0x01, g_ucAck);
+    ParallelI2C.start();
+    ParallelI2C.sendByte(ADDR_READ, g_dummyAck);
 
-    // 3. 连续读取 6 个字节 (加速度 X, Y, Z) - 存入 buffer 0~5
-    for (uint8_t i = 0; i < 6; i++) {
-        I2C_ReceiveByte(pPacketBuffer[i].ucData, 1); // ACK
+    // 3. 读取加速度 (0~5)
+    for (int i = 0; i < 6; i++) {
+        ParallelI2C.receiveByte(pPacketBuffer[i].data, true); 
     }
 
-    // 4. 定义的缓冲区来接 64 个传感器的废弃数据
-    uint8_t dummy[I2C_NUM]; 
-    
-    I2C_ReceiveByte(dummy, 1); // 读 Temp H (0x41), 丢进垃圾桶, 发 ACK
-    I2C_ReceiveByte(dummy, 1); // 读 Temp L (0x42), 丢进垃圾桶, 发 ACK
+    // 4. 丢弃温度
+    uint8_t dummy[I2C_NUM];
+    ParallelI2C.receiveByte(dummy, true);
+    ParallelI2C.receiveByte(dummy, true);
 
-    // 5. 继续读取 5 个陀螺仪字节 (Gyro X H/L, Y H/L, Z H) - 存入 buffer 6~10
-    for (uint8_t i = 6; i < 11; i++) {
-        I2C_ReceiveByte(pPacketBuffer[i].ucData, 1); // ACK
+    // 5. 读取陀螺仪前5字节 (6~10)
+    for (int i = 6; i < 11; i++) {
+        ParallelI2C.receiveByte(pPacketBuffer[i].data, true);
     }
 
-    // 6. 读取最后一个字节 (Gyro Z Low) 并发送 NACK
-    I2C_ReceiveByte(pPacketBuffer[11].ucData, 0); // NACK
+    // 6. 读取最后一个字节 (11) + NACK
+    ParallelI2C.receiveByte(pPacketBuffer[11].data, false); 
 
-    I2C_Stop();
-
-    return 0;
-}
-static void ICM20602_Init_Chip(void)
-{
-    I2C_Config();
-    ICM20602_WriteReg(ICM20602_PWR_MGMT_1, 0x01);
-    ICM20602_WriteReg(ICM20602_PWR_MGMT_2, 0x00);
-    ICM20602_WriteReg(ICM20602_SMPLRT_DIV, 0x07);
-    ICM20602_WriteReg(ICM20602_GYRO_CONFIG, 0x18);
-    ICM20602_WriteReg(ICM20602_ACCEL_CONFIG, 0x18);
-    ICM20602_WriteReg(ICM20602_ACCEL_CONFIG2, 0x06);
-
-    // Sensor 1 修复逻辑 (保持之前的代码)
-    for(volatile uint32_t i = 0; i < 720000; i++);
-    uint8_t check_buf[I2C_NUM];
-    I2C_Start();
-    I2C_SendByte(ICM20602_I2C_ADDRESS, g_ucAck);
-    I2C_SendByte(ICM20602_ACCEL_CONFIG, g_ucAck);
-    I2C_Start();
-    I2C_SendByte(ICM20602_I2C_ADDRESS | 0x01, g_ucAck);
-    I2C_ReceiveByte(check_buf, 0); 
-    I2C_Stop();
-    if (check_buf[0] != 0x18) {
-        ICM20602_WriteReg(ICM20602_PWR_MGMT_1, 0x01);
-        for(volatile uint32_t k = 0; k < 360000; k++);
-        ICM20602_WriteReg(ICM20602_ACCEL_CONFIG, 0x18);
-        ICM20602_WriteReg(ICM20602_GYRO_CONFIG, 0x18);
-    }
-}
-
-static void ICM20602_WriteReg(uint8_t RegAddress, uint8_t ucData)
-{
-    I2C_Start();
-    I2C_SendByte(ICM20602_I2C_ADDRESS, g_ucAck);
-    I2C_SendByte(RegAddress, g_ucAck);
-    I2C_SendByte(ucData, g_ucAck);
-    I2C_Stop();
+    ParallelI2C.stop();
 }

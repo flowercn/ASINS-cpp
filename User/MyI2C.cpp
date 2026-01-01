@@ -3,9 +3,6 @@
 #include "GpioPin.h"
 #include <cstring>
 
-// ============================================================================
-// C++14 兼容 手动实现 index_sequence（避免 Keil ARMCLANG 的 <utility> bug）
-// ============================================================================
 template<size_t... Is>
 struct index_sequence {};
 
@@ -37,7 +34,7 @@ using SCL_GroupA = PinList<PA<4>, PA<5>, PA<6>, PA<7>>;
 using SCL_GroupG = PinList<PG<0>, PG<1>, PG<2>, PG<3>>;
 
 // ============================================================================
-// C++17 编译期遍历 - 消除递归，提升编译速度
+// 编译期遍历与掩码计算
 // ============================================================================
 
 // 实现函数：使用 index_sequence 展开
@@ -59,7 +56,6 @@ void for_each_pin(PinList<Pins...>, Func f) {
 template<uint32_t TargetPortAddr, typename... Pins>
 constexpr uint16_t get_port_mask(PinList<Pins...>) {
     uint16_t mask = 0;
-    // 参数包折叠表达式：只累加属于目标端口的引脚掩码
     ((mask |= (Pins::BaseAddr == TargetPortAddr ? Pins::PinMask : 0)), ...);
     return mask;
 }
@@ -107,10 +103,23 @@ static inline void SDA_Low() {
     Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
 }
 
+// === GPIO 初始化辅助函数 ===
+struct PinInitSCL {
+    template<size_t I, typename P>
+    void operator()() {
+        GPIO_InitTypeDef cfg;
+        cfg.GPIO_Pin = P::PinMask;
+        cfg.GPIO_Mode = GPIO_Mode_Out_OD;
+        cfg.GPIO_Speed = GPIO_Speed_50MHz;
+        GPIO_Init(P::Port(), &cfg);
+        P::set();
+    }
+};
+
 struct BitReader {
     uint8_t* data;
     uint8_t  mask;
-    // 寄存器缓存（一次性读取所有端口）
+    // 寄存器缓存
     uint16_t vB, vC, vD, vE, vF;
 
     BitReader(uint8_t* d, uint8_t m) : data(d), mask(m) {
@@ -125,11 +134,7 @@ struct BitReader {
     // 编译器会为每个 (Index, Pin) 生成一个独立的优化实例
     template<size_t Index, typename Pin>
     __attribute__((always_inline))
-    void operator()() {
-        // === [c++17特性]if constexpr 用 BaseAddr 整数比较 ===
-        // BaseAddr 是编译期常量 (0x40010C00 等)
-        // 编译器会在编译期直接判断，生成的代码只保留一个分支
-        
+    void operator()() {  
         uint16_t portVal = 0;
         if constexpr (Pin::BaseAddr == GPIOB_BASE) portVal = vB;
         else if constexpr (Pin::BaseAddr == GPIOC_BASE) portVal = vC;
@@ -141,9 +146,6 @@ struct BitReader {
     }
 };
 
-// ============================================================================
-// AckReader - 完整 ACK 检查
-// ============================================================================
 struct AckReader {
     uint8_t* ack;
     uint16_t vB, vC, vD, vE, vF;
@@ -171,13 +173,8 @@ struct AckReader {
     }
 };
 
-// === 全局错误标志 ===
-volatile int g_i2c_error_detected = 0;
-
-// === GPIO 初始化辅助函数 ===
-struct PinInitSCL {
-    template<size_t I, typename P>
-    void operator()() {
+struct PinInit {
+    template<size_t I, typename P> void operator()() {
         GPIO_InitTypeDef cfg;
         cfg.GPIO_Pin = P::PinMask;
         cfg.GPIO_Mode = GPIO_Mode_Out_OD;
@@ -187,143 +184,96 @@ struct PinInitSCL {
     }
 };
 
-struct PinInitSDA {
-    template<size_t I, typename P>
-    void operator()() {
-        GPIO_InitTypeDef cfg;
-        cfg.GPIO_Pin = P::PinMask;
-        cfg.GPIO_Mode = GPIO_Mode_Out_OD;
-        cfg.GPIO_Speed = GPIO_Speed_50MHz;
-        GPIO_Init(P::Port(), &cfg);
-        P::set();
-    }
-};
-
-// ============================================================================
-// C 接口导出
-// ============================================================================
-extern "C" {
-
-void I2C_Config(void) {
-    // ========================================================================
-    // 防御性初始化：隔离外部硬件冲突
-    // ========================================================================
-    
-    // 1. 关闭可能接管引脚的外设时钟
+void ParallelI2CManager::init() {
+    // 关闭冲突外设
     RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3 | RCC_APB1Periph_TIM4 | 
                            RCC_APB1Periph_I2C1 | RCC_APB1Periph_CAN1, DISABLE);
-    
-    // 2. 关闭FSMC并禁用外部SRAM片选（PG10=NE3）
     RCC_AHBPeriphClockCmd(RCC_AHBPeriph_FSMC, DISABLE);
-    FSMC_Bank1->BTCR[4] = 0x00000000;  // 禁用FSMC Bank1 SRAM3
+    FSMC_Bank1->BTCR[4] = 0x00000000; 
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_ADC2 | RCC_APB2Periph_ADC3, DISABLE);
     
-    // 3. 关闭可能冲突的ADC
-    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1 | RCC_APB2Periph_ADC2 | 
-                           RCC_APB2Periph_ADC3, DISABLE);
-    
-    // 4. 开启所有 GPIO 时钟（必须在FSMC禁用后重新配置GPIO）
+    // 开启 GPIO 时钟
     RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB | 
                            RCC_APB2Periph_GPIOC | RCC_APB2Periph_GPIOD | 
                            RCC_APB2Periph_GPIOE | RCC_APB2Periph_GPIOF | 
                            RCC_APB2Periph_GPIOG, ENABLE);
     
-    // 5. 外部SRAM片选拉高（PG10 = FSMC_NE3），强制禁用外部芯片
+    // 禁用外部 SRAM (NE3)
     GPIO_InitTypeDef sram_cs;
     sram_cs.GPIO_Pin = GPIO_Pin_10;
     sram_cs.GPIO_Mode = GPIO_Mode_Out_PP;
     sram_cs.GPIO_Speed = GPIO_Speed_50MHz;
     GPIO_Init(GPIOG, &sram_cs);
-    GPIO_SetBits(GPIOG, GPIO_Pin_10);  // NE3拉高 = 外部SRAM禁用
+    GPIO_SetBits(GPIOG, GPIO_Pin_10);
 
-    // 6. 初始化 SCL (开漏输出)
-    for_each_pin(SCL_GroupA{}, PinInitSCL{});
-    for_each_pin(SCL_GroupG{}, PinInitSCL{});
-
-    // 7. 初始化 SDA (开漏输出)
-    for_each_pin(SensorPins{}, PinInitSDA{});
+    // 初始化所有通道引脚
+    for_each_pin(SCL_GroupA{}, PinInit{});
+    for_each_pin(SCL_GroupG{}, PinInit{});
+    for_each_pin(SensorPins{}, PinInit{});
+    
+    clearError();
 }
 
-void I2C_Start(void) { 
-    SDA_High(); 
-    Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);  // 确保总线空闲
-    SCL_High(); 
-    Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);  // 建立时间
-    SDA_Low();  // START 条件：SCL 高时 SDA 下降沿
-    Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);   // 保持时间
-    SCL_Low(); 
+void ParallelI2CManager::start() {
+    SDA_High(); Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
+    SCL_High(); Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
+    SDA_Low();  Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
+    SCL_Low();
 }
 
-void I2C_Stop(void) { 
-    SDA_Low(); 
-    Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);   // 建立时间
-    SCL_High(); 
-    Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);  // 建立时间
-    SDA_High();  // STOP 条件：SCL 高时 SDA 上升沿
-}
-
-// ============================================================================
-// I2C_ReceiveByte - 接收 64 通道数据
-// ============================================================================
-void I2C_ReceiveByte(uint8_t* byte, uint8_t Ack) {
-    // 释放总线（开漏模式下写 1 相当于高阻态）
+void ParallelI2CManager::stop() {
+    SDA_Low();  Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
+    SCL_High(); Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
     SDA_High();
-    
-    memset(byte, 0, I2C_NUM);
-
-    // 循环读取 8 位
-    for (uint8_t j = 0; j < 8; j++) {
-        SCL_High();  // SCL 拉高，从机此时应该已输出数据
-        BitReader reader(byte, (0x80 >> j));
-        for_each_pin(SensorPins{}, reader);
-        
-        SCL_Low();   // SCL 拉低，准备下一位
-    }
-    
-    // 发送 ACK/NACK
-    if (Ack) SDA_Low();   // ACK = 拉低
-    else SDA_High();      // NACK = 保持高
-    
-    SCL_High();
-    SCL_Low();
-    SDA_High();  // 释放总线
 }
-// I2C_SendByte - 发送字节并检查 ACK
-void I2C_SendByte(uint8_t byte, uint8_t* Ack) {
-    // 发送 8 位数据
+
+void ParallelI2CManager::sendByte(uint8_t byte, uint8_t* pAckBuffer) {
+    // 发送 8 位
     for (uint8_t i = 0; i < 8; i++) {
-        if ((byte >> (7 - i)) & 0x01) 
-            SDA_High();
-        else 
-            SDA_Low();
-        
-        SCL_High();
-        SCL_Low();
+        if ((byte >> (7 - i)) & 0x01) SDA_High(); else SDA_Low();
+        SCL_High(); SCL_Low();
     }
     
-    SDA_High();  // 释放 SDA，让从机控制
-    SCL_High();  // SCL 拉高，从机此时输出 ACK
+    // 释放总线，准备读取 ACK
+    SDA_High(); 
+    SCL_High();
     
-    // 用 AckReader 快速读取所有通道的 ACK 状态
-    uint8_t ack_buffer[I2C_NUM];
-    memset(ack_buffer, 0, I2C_NUM);
-    
-    AckReader ack_reader(ack_buffer);
-    for_each_pin(SensorPins{}, ack_reader);
+    uint8_t ack_local[I2C_NUM] = {0};
+    AckReader reader(ack_local);
+    for_each_pin(SensorPins{}, reader);
     
     SCL_Low();
-    
-    // 检查是否有 NACK（ACK 位为 1 表示 NACK）
+
+    // 错误检测 (ACK=0 表示成功, ACK=1 表示 NACK)
     for (int i = 0; i < I2C_NUM; i++) {
-        if (ack_buffer[i] != 0) {
-            g_i2c_error_detected = 1;
+        if (ack_local[i] != 0) { 
+            error_detected_ = true;
             break;
         }
     }
     
-    // 如果调用者提供了 Ack 指针，返回结果
-    if (Ack) {
-        memcpy(Ack, ack_buffer, I2C_NUM);
+    if (pAckBuffer) {
+        memcpy(pAckBuffer, ack_local, I2C_NUM);
     }
 }
 
-} // extern "C"
+void ParallelI2CManager::receiveByte(uint8_t* pRxBuffer, bool sendAck) {
+    SDA_High(); // 释放总线准备读取
+    memset(pRxBuffer, 0, I2C_NUM);
+
+    for (uint8_t j = 0; j < 8; j++) {
+        SCL_High();
+        BitReader reader(pRxBuffer, (0x80 >> j));
+        for_each_pin(SensorPins{}, reader);
+        SCL_Low();
+    }
+    
+    // 发送 ACK/NACK
+    if (sendAck) SDA_Low(); else SDA_High();
+    SCL_High(); SCL_Low();
+    SDA_High(); // 释放
+}
+
+
+// === 全局错误标志 ===
+volatile int g_i2c_error_detected = 0;
