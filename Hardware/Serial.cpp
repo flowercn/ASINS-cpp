@@ -26,28 +26,37 @@
     #define SERIAL_DMA_IRQHandler       DMA1_Channel7_IRQHandler
 #endif
 
-uint8_t SerialManager::s_buffer_active[DMA_BUFFER_SIZE];
-uint8_t SerialManager::s_buffer_shadow[DMA_BUFFER_SIZE];
+uint8_t SerialManager::s_buffer_active[MAX_FRAME_SIZE];
+uint8_t SerialManager::s_buffer_shadow[MAX_FRAME_SIZE];
 
 void SerialManager::init(uint32_t baudrate) {
     configHardware(baudrate);
     configDma();
 }
 
-bool SerialManager::transmit(uint8_t* pBuffer){
-	ScopedIrqLock lock;
-	if (current_tx_ptr == nullptr){
-		current_tx_ptr =pBuffer;
-		SERIAL_DMA_CHANNEL->CMAR = reinterpret_cast<uint32_t>(pBuffer);
-        SERIAL_DMA_CHANNEL->CNDTR = DMA_BUFFER_SIZE;
+bool SerialManager::isBufferBusy(uint8_t* pBuf) {
+    ScopedIrqLock lock; // 加锁
+    return (current_tx_ptr == pBuf) || (next_tx_ptr == pBuf);
+}
+
+bool SerialManager::transmit(uint8_t* pBuffer, size_t length) {
+    ScopedIrqLock lock;
+    
+    if (current_tx_ptr == nullptr) {
+        // 空闲发送
+        current_tx_ptr = pBuffer;
+        SERIAL_DMA_CHANNEL->CMAR = reinterpret_cast<uint32_t>(pBuffer);
+        SERIAL_DMA_CHANNEL->CNDTR = length; // 写入实际长度
         DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE);
         return true;
-	}
-	else if (next_tx_ptr == nullptr) {
+    }
+    else if (next_tx_ptr == nullptr) {
+        // 忙等待
         next_tx_ptr = pBuffer;
+        next_tx_length = length; // 记录等待发送的长度
         return true;
     }
-	return false;
+    return false; // 队列满
 }
 
 SerialCommand SerialManager::getCommand(){
@@ -57,19 +66,17 @@ SerialCommand SerialManager::getCommand(){
 }
 
 void SerialManager::handleDmaIsr() {
-	if(DMA_GetITStatus(SERIAL_DMA_IT_GL_FLAG) != RESET) {
-		DMA_ClearITPendingBit(SERIAL_DMA_IT_GL_FLAG);
+    if (DMA_GetITStatus(SERIAL_DMA_IT_GL_FLAG) != RESET) {
+        DMA_ClearITPendingBit(SERIAL_DMA_IT_GL_FLAG);
         DMA_Cmd(SERIAL_DMA_CHANNEL, DISABLE);
-		
-		if (next_tx_ptr != nullptr) {
-			current_tx_ptr =next_tx_ptr;
-			next_tx_ptr = nullptr;
-			
-			SERIAL_DMA_CHANNEL->CMAR = reinterpret_cast<uint32_t>(current_tx_ptr);
-            SERIAL_DMA_CHANNEL->CNDTR = DMA_BUFFER_SIZE;
-			DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE);
-		} 
-		else {
+        if (next_tx_ptr != nullptr) {
+            // 切换缓冲区
+            current_tx_ptr = next_tx_ptr;
+            SERIAL_DMA_CHANNEL->CMAR = reinterpret_cast<uint32_t>(current_tx_ptr);
+            SERIAL_DMA_CHANNEL->CNDTR = next_tx_length; // 使用记录的长度
+            next_tx_ptr = nullptr;
+            DMA_Cmd(SERIAL_DMA_CHANNEL, ENABLE);
+        } else {
             current_tx_ptr = nullptr;
         }
     }
@@ -82,8 +89,7 @@ void SerialManager::handleUartIsr() {
 }
 
 void SerialManager::configHardware(uint32_t bound) {
-    // ... 原 USART_Config 逻辑 ...
-	    GPIO_InitTypeDef GPIO_InitStruct;
+	GPIO_InitTypeDef GPIO_InitStruct;
     USART_InitTypeDef USART_InitStruct;
 
     // 使能USART和GPIO的时钟
@@ -95,7 +101,6 @@ void SerialManager::configHardware(uint32_t bound) {
     GPIO_InitStruct.GPIO_Pin = SERIAL_TX_PIN;
     GPIO_InitStruct.GPIO_Mode = GPIO_Mode_AF_PP; // 复用推挽输出
     GPIO_Init(SERIAL_GPIO_PERIPH, &GPIO_InitStruct);
-
     GPIO_InitStruct.GPIO_Pin = SERIAL_RX_PIN;
     GPIO_InitStruct.GPIO_Mode = GPIO_Mode_IN_FLOATING; // 浮空输入
     GPIO_Init(SERIAL_GPIO_PERIPH, &GPIO_InitStruct);
@@ -108,7 +113,6 @@ void SerialManager::configHardware(uint32_t bound) {
     USART_InitStruct.USART_StopBits = USART_StopBits_1;
     USART_InitStruct.USART_WordLength = USART_WordLength_8b;
     USART_Init(SERIAL_USART_PERIPH, &USART_InitStruct);
-
     
     USART_DMACmd(SERIAL_USART_PERIPH, USART_DMAReq_Tx, ENABLE);  // 使能USART的DMA发送请求
     USART_Cmd(SERIAL_USART_PERIPH, ENABLE);      // 使能USART
@@ -136,17 +140,11 @@ void SerialManager::configDma() {
     DMA_InitStruct.DMA_PeripheralBaseAddr = (uint32_t)&SERIAL_USART_PERIPH->DR; // 外设地址
     DMA_InitStruct.DMA_MemoryBaseAddr = reinterpret_cast<uint32_t>(s_buffer_active); // 内存地址
     DMA_InitStruct.DMA_DIR = DMA_DIR_PeripheralDST; // 方向：内存到外设
-    DMA_InitStruct.DMA_BufferSize = DMA_BUFFER_SIZE; // 缓冲区大小
+    DMA_InitStruct.DMA_BufferSize = MAX_FRAME_SIZE; // 初始给个最大值
     DMA_InitStruct.DMA_PeripheralInc = DMA_PeripheralInc_Disable; // 外设地址不增
     DMA_InitStruct.DMA_MemoryInc = DMA_MemoryInc_Enable; // 内存地址递增
-    
-    // ==========================================================
-    // !!! 关键修复：必须明确指定数据宽度为 Byte (8位) !!!
-    // 之前未初始化这里，如果是随机值，DMA将无法工作
-    // ==========================================================
     DMA_InitStruct.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
     DMA_InitStruct.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;
-    
     DMA_InitStruct.DMA_Mode = DMA_Mode_Normal; // 普通模式
     DMA_InitStruct.DMA_Priority = DMA_Priority_VeryHigh; // 优先级
     DMA_InitStruct.DMA_M2M = DMA_M2M_Disable; // 非内存到内存

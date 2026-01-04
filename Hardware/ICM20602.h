@@ -28,7 +28,7 @@ private:
     static const uint8_t ADDR_READ  = 0xD1;
 };
 
-inline auto& IcmSensors = Icm20602Manager::getInstance();
+inline auto& ImuSensors = Icm20602Manager::getInstance();
 
 extern "C" {
 	void ICM20602_Init_Bare();

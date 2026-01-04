@@ -1,6 +1,7 @@
 #include "MyI2C.h"
 #include "Delay.h"
 #include "GpioPin.h"
+#include "Serial.h"
 #include <cstring>
 
 template<size_t... Is>
@@ -36,12 +37,9 @@ using SCL_GroupG = PinList<PG<0>, PG<1>, PG<2>, PG<3>>;
 // ============================================================================
 // 编译期遍历与掩码计算
 // ============================================================================
-
-// 实现函数：使用 index_sequence 展开
 template<typename... Pins, typename Func, size_t... Is>
 __attribute__((always_inline))
 void for_each_pin_impl(PinList<Pins...>, Func& f, index_sequence<Is...>) {
-    // C++17 折叠表达式：一行代码展开所有调用，编译器自动优化为顺序执行
     (f.template operator()<Is, Pins>(), ...);
 }
 
@@ -70,19 +68,19 @@ constexpr uint16_t MASK_SCL_A = get_port_mask<GPIOA_BASE>(SCL_GroupA{});
 constexpr uint16_t MASK_SCL_G = get_port_mask<GPIOG_BASE>(SCL_GroupG{});
 
 // === 时序参数 ===
-#define I2C_DELAY_FAST_LOW_TICKS  112
-#define I2C_DELAY_FAST_HIGH_TICKS 104
+constexpr uint16_t I2C_DELAY_HIGH_TICKS=50;
+constexpr uint16_t I2C_DELAY_LOW_TICKS=75;
 
 static inline void SCL_High() {
     GPIOA->BSRR = MASK_SCL_A; 
     GPIOG->BSRR = MASK_SCL_G;
-    Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
+    Delay_ticks(I2C_DELAY_HIGH_TICKS);
 }
 
 static inline void SCL_Low() {
     GPIOA->BRR = MASK_SCL_A; 
     GPIOG->BRR = MASK_SCL_G;
-    Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
+    Delay_ticks(I2C_DELAY_LOW_TICKS);
 }
 
 static inline void SDA_High() {
@@ -91,7 +89,7 @@ static inline void SDA_High() {
     GPIOD->BSRR = MASK_SDA_D; 
     GPIOE->BSRR = MASK_SDA_E; 
     GPIOF->BSRR = MASK_SDA_F;
-    Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
+    Delay_ticks(I2C_DELAY_HIGH_TICKS);
 }
 
 static inline void SDA_Low() {
@@ -100,21 +98,8 @@ static inline void SDA_Low() {
     GPIOD->BRR = MASK_SDA_D; 
     GPIOE->BRR = MASK_SDA_E; 
     GPIOF->BRR = MASK_SDA_F;
-    Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
+    Delay_ticks(I2C_DELAY_LOW_TICKS);
 }
-
-// === GPIO 初始化辅助函数 ===
-struct PinInitSCL {
-    template<size_t I, typename P>
-    void operator()() {
-        GPIO_InitTypeDef cfg;
-        cfg.GPIO_Pin = P::PinMask;
-        cfg.GPIO_Mode = GPIO_Mode_Out_OD;
-        cfg.GPIO_Speed = GPIO_Speed_50MHz;
-        GPIO_Init(P::Port(), &cfg);
-        P::set();
-    }
-};
 
 struct BitReader {
     uint8_t* data;
@@ -124,14 +109,11 @@ struct BitReader {
 
     BitReader(uint8_t* d, uint8_t m) : data(d), mask(m) {
         // 在 SCL 高电平时，一次性快速读取所有 IDR
-        vB = GPIOB->IDR; 
-        vC = GPIOC->IDR; 
-        vD = GPIOD->IDR;
-        vE = GPIOE->IDR; 
+        vB = GPIOB->IDR; vC = GPIOC->IDR; 
+        vD = GPIOD->IDR; vE = GPIOE->IDR; 
         vF = GPIOF->IDR;
     }
 
-    // 编译器会为每个 (Index, Pin) 生成一个独立的优化实例
     template<size_t Index, typename Pin>
     __attribute__((always_inline))
     void operator()() {  
@@ -142,7 +124,7 @@ struct BitReader {
         else if constexpr (Pin::BaseAddr == GPIOE_BASE) portVal = vE;
         else if constexpr (Pin::BaseAddr == GPIOF_BASE) portVal = vF;
 
-        data[Index] |= (-(uint8_t)(!!(portVal & Pin::PinMask))) & mask;
+        if (portVal & Pin::PinMask) data[Index] |= mask;
     }
 };
 
@@ -151,10 +133,8 @@ struct AckReader {
     uint16_t vB, vC, vD, vE, vF;
 
     AckReader(uint8_t* a) : ack(a) {
-        vB = GPIOB->IDR; 
-        vC = GPIOC->IDR; 
-        vD = GPIOD->IDR;
-        vE = GPIOE->IDR; 
+        vB = GPIOB->IDR; vC = GPIOC->IDR; 
+        vD = GPIOD->IDR; vE = GPIOE->IDR; 
         vF = GPIOF->IDR;
     }
 
@@ -215,19 +195,20 @@ void ParallelI2CManager::init() {
 }
 
 void ParallelI2CManager::start() {
-    SDA_High(); Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
-    SCL_High(); Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
-    SDA_Low();  Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
+    SDA_High(); Delay_ticks(I2C_DELAY_HIGH_TICKS);
+    SCL_High(); Delay_ticks(I2C_DELAY_HIGH_TICKS);
+    SDA_Low();  Delay_ticks(I2C_DELAY_LOW_TICKS);
     SCL_Low();
 }
 
 void ParallelI2CManager::stop() {
-    SDA_Low();  Delay_ticks(I2C_DELAY_FAST_LOW_TICKS);
-    SCL_High(); Delay_ticks(I2C_DELAY_FAST_HIGH_TICKS);
+    SDA_Low();  Delay_ticks(I2C_DELAY_LOW_TICKS);
+    SCL_High(); Delay_ticks(I2C_DELAY_HIGH_TICKS);
     SDA_High();
 }
 
 void ParallelI2CManager::sendByte(uint8_t byte, uint8_t* pAckBuffer) {
+	ScopedIrqLock lock;
     // 发送 8 位
     for (uint8_t i = 0; i < 8; i++) {
         if ((byte >> (7 - i)) & 0x01) SDA_High(); else SDA_Low();
@@ -258,6 +239,7 @@ void ParallelI2CManager::sendByte(uint8_t byte, uint8_t* pAckBuffer) {
 }
 
 void ParallelI2CManager::receiveByte(uint8_t* pRxBuffer, bool sendAck) {
+	ScopedIrqLock lock;
     SDA_High(); // 释放总线准备读取
     memset(pRxBuffer, 0, I2C_NUM);
 
@@ -267,13 +249,8 @@ void ParallelI2CManager::receiveByte(uint8_t* pRxBuffer, bool sendAck) {
         for_each_pin(SensorPins{}, reader);
         SCL_Low();
     }
-    
     // 发送 ACK/NACK
     if (sendAck) SDA_Low(); else SDA_High();
     SCL_High(); SCL_Low();
     SDA_High(); // 释放
 }
-
-
-// === 全局错误标志 ===
-volatile int g_i2c_error_detected = 0;

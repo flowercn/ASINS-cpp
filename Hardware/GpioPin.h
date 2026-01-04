@@ -1,17 +1,12 @@
 /**
  * @file GpioPin.h
- * @brief C++17 模板元编程 GPIO 驱动
+ * @brief 模板元编程 GPIO 驱动
  * @details 使用模板参数在编译期确定端口和引脚，实现零运行时开销的 GPIO 操作。
  *          编译器会直接将这些代码展开为寄存器操作指令。
  */
 
 #pragma once
-
 #include "stm32f10x.h"
-
-// ========================================
-// GPIO 模板驱动类
-// ========================================
 
 template<uint32_t PortAddr, uint16_t PinNumber>
 class GpioPin {
@@ -45,19 +40,19 @@ public:
     }
 
     // 初始化为输出模式
-    static void initOutput() {
+    static void initOutputPP() {
         GPIO_InitTypeDef GPIO_InitStructure;
         GPIO_InitStructure.GPIO_Pin = PinMask;
         GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
         GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
         GPIO_Init(Port(), &GPIO_InitStructure);
     }
+
 };
 
 // ========================================
 // 端口别名模板
 // ========================================
-
 template<uint16_t N> using PA = GpioPin<GPIOA_BASE, N>;
 template<uint16_t N> using PB = GpioPin<GPIOB_BASE, N>;
 template<uint16_t N> using PC = GpioPin<GPIOC_BASE, N>;

@@ -2,7 +2,6 @@
 #include <cstring>
 
 static uint8_t g_dummyAck[I2C_NUM];
-
 static const uint8_t g_ucSerialMap[] = {
     0x01, 0x02, // Accel X High, Low
     0x03, 0x04, // Accel Y High, Low
