@@ -1,11 +1,14 @@
 #pragma once
-
 #include "stm32f10x.h"
 #include "ICM20602_Reg.h"
 #include "MyI2C.h"
-#include "Serial.h"
 
 static constexpr uint8_t ICM20602_I2C_ADDRESS = 0xD0;
+// 纯粹的硬件原始数据缓存 (12个寄存器 x 64个传感器)
+// 对应关系: 0-5: Accel(H/L xyz), 6-11: Gyro(H/L xyz)
+struct IcmRawDataBuffer {
+    uint8_t channels[12][64];
+};
 
 class Icm20602Manager {
 public:
@@ -17,8 +20,7 @@ public:
     Icm20602Manager& operator=(const Icm20602Manager&) = delete;
 
     void init();
-    void initPacketHeaders(uint8_t* ping_buf, uint8_t* pong_buf);
-    void readAllSensors(SerialImuPacket* pPacketBuffer);
+    void readAllSensors(IcmRawDataBuffer* pPacketBuffer);
 
 private:
     Icm20602Manager() = default;
@@ -29,7 +31,3 @@ private:
 };
 
 inline auto& ImuSensors = Icm20602Manager::getInstance();
-
-extern "C" {
-	void ICM20602_Init_Bare();
-}

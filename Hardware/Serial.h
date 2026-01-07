@@ -27,7 +27,8 @@ enum class FrameType : uint8_t {
 struct FrameHeader {
     uint8_t magic[2]; // 0xA5, 0x5A
     FrameType type;   // 0x00 或 0x01
-    uint8_t reserved; // 对齐/计数器/状态位
+    uint8_t frameCounter; // 对齐/计数器/状态位
+	uint32_t timestamp;  //时间戳
 };// 协议头 (4字节)
 
 struct PayloadRaw {

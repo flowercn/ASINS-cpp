@@ -7,6 +7,7 @@
 #include "GpioPin.h" 
 #include "Serial.h"
 #include "ICM20602.h"
+#include "Timer.h"
 
 #include "PlatformSTM32.h" // 适配器
 #include "ImuService.h"    // 核心业务
@@ -23,6 +24,7 @@ int main(void) {
     LedRed::reset(); // 
     LedGreen::set();
 
+	HwTimer_Init();
     Serial.init(921600);
     ImuSensors.init(); 
 

@@ -20,8 +20,7 @@ void ImuService::process(const SensorFrame& frame) {
     if (_state == State::Calibrating || !_io.isTxBusy()) {
         accumulateData(frame);
     } else {
-        // 丢弃
-        return; 
+        accumulateData(frame);
     }
     switch (_state) {
         case State::Normal:      runNormalLogic();      break;
@@ -69,6 +68,7 @@ void ImuService::finishCalibration() {
 }
 
 void ImuService::accumulateData(const SensorFrame& frame) {
+	_currentTimestamp = frame.timestamp;
     for (int a = 0; a < AXIS; ++a) {
         for (int i = 0; i < SENSORS; ++i) {
             _accumulator[a][i] += frame.data[a][i];
@@ -88,18 +88,19 @@ void ImuService::calculateAverages() {
 }
 
 void ImuService::sendDataPacket() {
-    static uint8_t txBuf[2048]; 
+	uint8_t* pBuf = _io.acquireTxBuffer();
     size_t len = 0;
 
     if (shouldSendRaw()) {
-        len = fillRawPacket(txBuf);
+        len = fillRawPacket(pBuf);
         _framesSinceKeyframe = 0;
     } else {
-        len = fillDeltaPacket(txBuf);
+        len = fillDeltaPacket(pBuf);
     }
     memcpy(_lastSentVals, _currentVals, sizeof(_currentVals));
 
-    _io.write(txBuf, len);
+    // 提交发送
+    _io.commitTxBuffer(len);
 }
 
 bool ImuService::shouldSendRaw() {
@@ -128,7 +129,9 @@ size_t ImuService::fillRawPacket(uint8_t* buf) {
 
     head->magic[0] = 0xA5; head->magic[1] = 0x5A;
     head->type = FrameType::Raw16;
-
+	head->frameCounter = _frameCounter++; 
+    head->timestamp = _currentTimestamp;
+	
     for (int a = 0; a < AXIS; ++a) {
         for (int i = 0; i < SENSORS; ++i) {
             body->data[a][i] = static_cast<int16_t>(_currentVals[a][i]);
@@ -145,7 +148,8 @@ size_t ImuService::fillDeltaPacket(uint8_t* buf) {
 
     head->magic[0] = 0xA5; head->magic[1] = 0x5A;
     head->type = FrameType::Delta8;
-
+	head->frameCounter = _frameCounter++; 
+    head->timestamp = _currentTimestamp;
     for (int a = 0; a < AXIS; ++a) {
         for (int i = 0; i < SENSORS; ++i) {
             int32_t diff = _currentVals[a][i] - _lastSentVals[a][i];

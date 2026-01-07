@@ -25,6 +25,7 @@ struct LiteArray {
 struct SensorFrame {
     static constexpr int SENSORS = 64;
     static constexpr int AXIS = 6;
+	uint32_t timestamp;
     LiteArray<LiteArray<int16_t, SENSORS>, AXIS> data;
     void clear() {
         // 利用结构体赋值特性清零
@@ -36,7 +37,8 @@ struct SensorFrame {
 class IIoPort {
 public:
     virtual ~IIoPort() = default; // 发送数据 (非阻塞)    
-    virtual bool write(const uint8_t* data, size_t len) = 0; // 发送忙检测
+	virtual uint8_t* acquireTxBuffer() = 0;
+	virtual bool commitTxBuffer(size_t len) = 0;
     virtual bool isTxBusy() const = 0;
     virtual uint8_t readCommand() = 0; // 读取指令 (返回 0 表示无指令)
 };
@@ -63,7 +65,10 @@ private:
     int32_t _offsets[AXIS][SENSORS];       // 校准偏移
     int32_t _currentVals[AXIS][SENSORS];   // 当前均值
     int32_t _lastSentVals[AXIS][SENSORS];  // 差分基准值
-
+	
+	uint32_t _currentTimestamp = 0;
+	uint8_t _frameCounter = 0;
+	
     int _sampleCount = 0;
     int _calibCount = 0;
     int _framesSinceKeyframe = KEYFRAME_INTERVAL; // 初始强制发关键帧
